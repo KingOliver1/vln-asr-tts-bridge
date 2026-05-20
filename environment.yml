@@ -7,6 +7,9 @@ dependencies:
   - pip
   - portaudio
   - ffmpeg
+  - pyyaml
+  - rospkg
+  - catkin_pkg
   - pip:
       - sounddevice>=0.4.6
       - vosk>=0.3.45
