@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import wave
+from array import array
 from pathlib import Path
 
 import yaml
@@ -29,6 +30,34 @@ def write_wav(path, pcm_bytes, sample_rate, channels):
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(pcm_bytes)
+
+
+def remove_pcm_dc_offset(pcm_bytes):
+    if not pcm_bytes:
+        return pcm_bytes
+
+    samples = array("h")
+    samples.frombytes(pcm_bytes)
+    if not samples:
+        return pcm_bytes
+    if sys.byteorder != "little":
+        samples.byteswap()
+
+    offset = int(round(sum(samples) / float(len(samples))))
+    if offset == 0:
+        return pcm_bytes
+
+    for index, sample in enumerate(samples):
+        value = sample - offset
+        if value > 32767:
+            value = 32767
+        elif value < -32768:
+            value = -32768
+        samples[index] = value
+
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples.tobytes()
 
 
 def capture_with_parec(cfg, duration_sec):
@@ -116,15 +145,22 @@ def analyze_audio(pcm_bytes, cfg):
     start_threshold = float(cfg.get("start_threshold", 0.018))
     stop_threshold = float(cfg.get("stop_threshold", 0.012))
     start_trigger_blocks = max(1, int(cfg.get("start_trigger_blocks", 1)))
+    vad_remove_dc_offset = bool(cfg.get("vad_remove_dc_offset", True))
 
     blocks = [
         pcm_bytes[index : index + block_size]
         for index in range(0, len(pcm_bytes) - block_size + 1, block_size)
     ]
-    rms_values = [audioop.rms(block, 2) / 32768.0 for block in blocks if block]
+    rms_values = [
+        audioop.rms(remove_pcm_dc_offset(block) if vad_remove_dc_offset else block, 2) / 32768.0
+        for block in blocks
+        if block
+    ]
     if not rms_values:
         raise RuntimeError("录音数据为空，无法分析")
 
+    dc_offset = audioop.avg(pcm_bytes, 2) / 32768.0
+    dc_removed_pcm_bytes = remove_pcm_dc_offset(pcm_bytes)
     consecutive = 0
     vad_triggered = False
     for rms in rms_values:
@@ -158,6 +194,10 @@ def analyze_audio(pcm_bytes, cfg):
         "start_threshold": start_threshold,
         "stop_threshold": stop_threshold,
         "start_trigger_blocks": start_trigger_blocks,
+        "vad_remove_dc_offset": vad_remove_dc_offset,
+        "dc_offset": dc_offset,
+        "dc_removed_rms": audioop.rms(dc_removed_pcm_bytes, 2) / 32768.0,
+        "dc_removed_sample_peak": audioop.max(dc_removed_pcm_bytes, 2) / 32768.0,
         "vad_triggered": vad_triggered,
     }
 
@@ -210,7 +250,12 @@ def print_analysis(analysis):
     )
     print("  样本峰值: {sample_peak:.5f}".format(**analysis))
     print(
-        "  VAD 阈值: start={start_threshold:.5f}, stop={stop_threshold:.5f}, 连续触发块={start_trigger_blocks}".format(
+        "  DC offset: {dc_offset:.5f}, 去 DC 后 RMS/峰值: {dc_removed_rms:.5f} / {dc_removed_sample_peak:.5f}".format(
+            **analysis
+        )
+    )
+    print(
+        "  VAD 阈值: start={start_threshold:.5f}, stop={stop_threshold:.5f}, 连续触发块={start_trigger_blocks}, 去 DC={vad_remove_dc_offset}".format(
             **analysis
         )
     )
@@ -227,6 +272,8 @@ def print_conclusion(analysis, vosk_text):
     if analysis["rms_peak"] < 0.01 and analysis["sample_peak"] < 0.03:
         print("  录音几乎没有有效信号，优先检查麦克风设备、系统输入源、静音和权限。")
         return
+    if abs(analysis["dc_offset"]) > 0.02:
+        print("  录音存在明显直流偏置；节点会先去 DC 再做云端 ASR/VAD。")
     if not analysis["vad_triggered"] and vosk_text:
         print("  麦克风和本地 Vosk 都可用；问题是能量 VAD 阈值不适合这路输入。")
         print("  当前节点默认启用 local/vosk_streaming，让 Vosk 自己做端点检测，不再依赖 RMS 阈值。")

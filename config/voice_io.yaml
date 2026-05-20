@@ -15,9 +15,10 @@ input_device: alsa_input.pci-0000_06_00.6.HiFi__hw_acp__source
 
 # Energy-based utterance detection. RMS is normalized to 0.0 - 1.0.
 block_duration_ms: 30
-start_threshold: 0.18
-stop_threshold: 0.12
+start_threshold: 0.010
+stop_threshold: 0.004
 start_trigger_blocks: 3
+vad_remove_dc_offset: true
 pre_roll_sec: 0.35
 end_silence_sec: 0.8
 min_utterance_sec: 0.35
@@ -25,6 +26,7 @@ max_utterance_sec: 8.0
 cooldown_sec: 0.4
 publish_empty_result: false
 pause_listening_while_speaking: true
+cloud_asr_remove_dc_offset: true
 
 local:
   # Required for local ASR. Example:
@@ -77,6 +79,8 @@ dashscope:
     - zh
   asr_channel_id:
     - 0
+  asr_upload_timeout_sec: 20.0
+  asr_http_timeout_sec: 30.0
   asr_poll_interval_sec: 1.0
   asr_timeout_sec: 120.0
 

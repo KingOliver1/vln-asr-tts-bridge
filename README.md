@@ -83,7 +83,13 @@ export DASHSCOPE_API_KEY=你的_api_key
 conda run -n asr4trailer_voice python scripts/test_dashscope_asr.py
 ```
 
-该脚本会逐步检查 API key、临时 OSS 上传、Fun-ASR 任务提交、任务轮询和结果下载。
+该脚本会逐步检查 API key、临时 OSS 上传、Fun-ASR 任务提交、任务轮询和结果下载。若要排除本机麦克风录音问题，可以先用阿里云公开样例音频验证云端链路：
+
+```bash
+conda run -n asr4trailer_voice python scripts/test_dashscope_asr.py --sample-audio
+```
+
+如果公开样例能识别，而本机录音返回 `SUCCESS_WITH_NO_VALID_FRAGMENT`，说明 DashScope 链路正常，问题通常是录音片段没有有效语音、输入设备不对、语音太短，或 VAD 阈值截断了语音。
 
 ## OpenAI 兼容后端
 

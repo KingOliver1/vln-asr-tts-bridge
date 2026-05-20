@@ -1,11 +1,13 @@
 import base64
 import importlib.util
 import os
+import requests
 import sys
 import tempfile
 import threading
 import types
 import unittest
+from array import array
 from http import HTTPStatus
 from pathlib import Path
 from unittest import mock
@@ -93,6 +95,7 @@ class DashScopeVoiceIOTests(unittest.TestCase):
         asr._model = "fun-asr-mtl"
         asr._language_hints = ["zh"]
         asr._channel_id = [0]
+        asr._http_timeout_sec = 30.0
 
         fake_response = FakeResponse(payload={"output": {"task_id": "task-123"}})
         with mock.patch("requests.post", return_value=fake_response) as post:
@@ -111,6 +114,7 @@ class DashScopeVoiceIOTests(unittest.TestCase):
         asr._api_base_url = "https://example.test/api/v1"
         asr._timeout_sec = 1.0
         asr._poll_interval_sec = 0.0
+        asr._http_timeout_sec = 30.0
 
         fake_response = FakeResponse(
             payload={
@@ -126,6 +130,84 @@ class DashScopeVoiceIOTests(unittest.TestCase):
         self.assertEqual(result_url, "https://example.test/result.json")
         post.assert_called_once()
         self.assertEqual(post.call_args.args[0], "https://example.test/api/v1/tasks/task-123")
+
+    def test_dashscope_asr_failure_is_sanitized(self):
+        asr = self.node.DashScopeASR.__new__(self.node.DashScopeASR)
+        asr._api_key = "sk-test"
+        asr._api_base_url = "https://example.test/api/v1"
+        asr._timeout_sec = 1.0
+        asr._poll_interval_sec = 0.0
+        asr._http_timeout_sec = 30.0
+
+        fake_response = FakeResponse(
+            payload={
+                "output": {
+                    "task_status": "FAILED",
+                    "code": "SUCCESS_WITH_NO_VALID_FRAGMENT",
+                    "message": "SUCCESS_WITH_NO_VALID_FRAGMENT",
+                    "results": [
+                        {
+                            "file_url": "https://temporary.example/audio.wav?secret=1",
+                            "subtask_status": "FAILED",
+                            "code": "SUCCESS_WITH_NO_VALID_FRAGMENT",
+                            "message": "SUCCESS_WITH_NO_VALID_FRAGMENT",
+                        }
+                    ],
+                }
+            }
+        )
+        with mock.patch("requests.post", return_value=fake_response):
+            with self.assertRaisesRegex(RuntimeError, "SUCCESS_WITH_NO_VALID_FRAGMENT") as ctx:
+                asr._wait_for_result_url("task-123")
+
+        self.assertNotIn("temporary.example", str(ctx.exception))
+
+    def test_remove_pcm_dc_offset(self):
+        pcm = (1000).to_bytes(2, "little", signed=True) * 16
+        cleaned = self.node._remove_pcm_dc_offset(pcm)
+        self.assertEqual(self.node.audioop.rms(cleaned, 2), 0)
+
+    def test_remove_pcm_dc_offset_preserves_little_endian_samples(self):
+        samples = array("h", [1000, 1100, 900, 1000])
+        if sys.byteorder != "little":
+            samples.byteswap()
+        cleaned = self.node._remove_pcm_dc_offset(samples.tobytes())
+        out = array("h")
+        out.frombytes(cleaned)
+        if sys.byteorder != "little":
+            out.byteswap()
+        self.assertEqual(list(out), [0, 100, -100, 0])
+
+    def test_dashscope_upload_timeout_fails_fast(self):
+        asr = self.node.DashScopeASR.__new__(self.node.DashScopeASR)
+        asr._api_key = "sk-test"
+        asr._model = "fun-asr-mtl"
+        asr._upload_timeout_sec = 0.1
+        asr._http_timeout_sec = 1.0
+
+        fake_upload_info = types.SimpleNamespace(
+            status_code=HTTPStatus.OK,
+            output={
+                "oss_access_key_id": "ak",
+                "signature": "sig",
+                "policy": "policy",
+                "upload_dir": "upload-dir",
+                "x_oss_object_acl": "private",
+                "x_oss_forbid_overwrite": "true",
+                "upload_host": "https://upload.example",
+            },
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp_file:
+            Path(tmp_file.name).write_bytes(b"fake-wav")
+            with mock.patch(
+                "dashscope.utils.oss_utils.OssUtils.get_upload_certificate",
+                return_value=fake_upload_info,
+            ):
+                with mock.patch("dashscope.common.utils.get_user_agent", return_value="ua"):
+                    with mock.patch("requests.post", side_effect=requests.Timeout):
+                        with self.assertRaisesRegex(RuntimeError, "upload timed out"):
+                            asr._upload_audio(Path(tmp_file.name))
 
     def test_dashscope_tts_uses_configured_voice_without_creating(self):
         params = {

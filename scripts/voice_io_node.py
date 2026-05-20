@@ -2,6 +2,7 @@
 import audioop
 import base64
 import json
+import mimetypes
 import os
 import queue
 import shlex
@@ -11,9 +12,13 @@ import tempfile
 import threading
 import time
 import wave
+from array import array
 from collections import deque
+from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
+from time import mktime
+from wsgiref.handlers import format_date_time
 
 import rospy
 from std_msgs.msg import String
@@ -104,6 +109,57 @@ def _dict_get(data, key, default=None):
     return getattr(data, key, default)
 
 
+def _remove_pcm_dc_offset(pcm_bytes):
+    if not pcm_bytes:
+        return pcm_bytes
+
+    samples = array("h")
+    samples.frombytes(pcm_bytes)
+    if not samples:
+        return pcm_bytes
+    if os.sys.byteorder != "little":
+        samples.byteswap()
+
+    offset = int(round(sum(samples) / float(len(samples))))
+    if offset == 0:
+        return pcm_bytes
+
+    for index, sample in enumerate(samples):
+        value = sample - offset
+        if value > 32767:
+            value = 32767
+        elif value < -32768:
+            value = -32768
+        samples[index] = value
+
+    if os.sys.byteorder != "little":
+        samples.byteswap()
+    return samples.tobytes()
+
+
+def _pcm_rms(pcm_bytes, remove_dc_offset=False):
+    if remove_dc_offset:
+        pcm_bytes = _remove_pcm_dc_offset(pcm_bytes)
+    return audioop.rms(pcm_bytes, 2) / 32768.0
+
+
+def _dashscope_results_summary(results):
+    summary = []
+    for index, result in enumerate(results or []):
+        status = _dict_get(result, "subtask_status", "")
+        code = _dict_get(result, "code", "")
+        message = _dict_get(result, "message", "")
+        parts = ["result[{}]".format(index)]
+        if status:
+            parts.append("status={}".format(status))
+        if code:
+            parts.append("code={}".format(code))
+        if message:
+            parts.append("message={}".format(message))
+        summary.append(" ".join(parts))
+    return "; ".join(summary) if summary else "<no results>"
+
+
 class LocalVoskASR:
     def __init__(self, sample_rate):
         try:
@@ -144,11 +200,14 @@ class OpenAIASR:
         self._client = _make_openai_client()
         self._model = _private_param("openai/asr_model", "gpt-4o-mini-transcribe")
         self._language = _private_param("language", "zh")
+        self._remove_dc_offset = bool(_private_param("cloud_asr_remove_dc_offset", True))
 
     def transcribe(self, pcm_bytes):
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
             wav_path = Path(tmp_file.name)
         try:
+            if self._remove_dc_offset:
+                pcm_bytes = _remove_pcm_dc_offset(pcm_bytes)
             _write_wav(wav_path, pcm_bytes, self._sample_rate, self._channels)
             with wav_path.open("rb") as audio_file:
                 kwargs = {
@@ -172,14 +231,24 @@ class DashScopeASR:
         self._model = _dashscope_param("asr_model", "fun-asr-mtl")
         self._poll_interval_sec = float(_dashscope_param("asr_poll_interval_sec", 1.0))
         self._timeout_sec = float(_dashscope_param("asr_timeout_sec", 120.0))
+        self._upload_timeout_sec = float(_dashscope_param("asr_upload_timeout_sec", 20.0))
+        self._http_timeout_sec = float(_dashscope_param("asr_http_timeout_sec", 30.0))
         self._language_hints = _dashscope_param("asr_language_hints", [_private_param("language", "zh")])
         self._channel_id = _dashscope_param("asr_channel_id", [0])
+        self._remove_dc_offset = bool(_private_param("cloud_asr_remove_dc_offset", True))
 
     def transcribe(self, pcm_bytes):
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
             wav_path = Path(tmp_file.name)
         try:
+            if self._remove_dc_offset:
+                pcm_bytes = _remove_pcm_dc_offset(pcm_bytes)
             _write_wav(wav_path, pcm_bytes, self._sample_rate, self._channels)
+            rospy.loginfo(
+                "DashScope ASR: prepared %.2fs wav (%d bytes)",
+                len(pcm_bytes) / float(self._sample_rate * self._channels * 2),
+                wav_path.stat().st_size,
+            )
             file_url = self._upload_audio(wav_path)
             task_id = self._submit_task(file_url)
             result_url = self._wait_for_result_url(task_id)
@@ -188,15 +257,68 @@ class DashScopeASR:
             wav_path.unlink(missing_ok=True)
 
     def _upload_audio(self, wav_path):
+        import requests
+
         try:
             from dashscope.utils.oss_utils import OssUtils
+            from dashscope.common.error import UploadFileException
+            from dashscope.common.utils import get_user_agent
         except ImportError as exc:
             raise RuntimeError("DashScope ASR requires the dashscope Python package in the conda env") from exc
 
-        file_url, _ = OssUtils.upload(model=self._model, file_path=str(wav_path), api_key=self._api_key)
-        if not file_url:
-            raise RuntimeError("DashScope ASR upload returned empty file URL")
-        return file_url
+        rospy.loginfo("DashScope ASR: requesting temporary OSS upload certificate")
+        upload_info = OssUtils.get_upload_certificate(
+            model=self._model,
+            api_key=self._api_key,
+            request_timeout=self._http_timeout_sec,
+        )
+        if upload_info.status_code != HTTPStatus.OK:
+            raise RuntimeError(
+                "DashScope ASR upload certificate failed: code={} message={}".format(
+                    getattr(upload_info, "code", ""),
+                    getattr(upload_info, "message", ""),
+                )
+            )
+        upload_info = upload_info.output
+
+        form_data = {
+            "OSSAccessKeyId": upload_info["oss_access_key_id"],
+            "Signature": upload_info["signature"],
+            "policy": upload_info["policy"],
+            "key": upload_info["upload_dir"] + "/" + os.path.basename(str(wav_path)),
+            "x-oss-object-acl": upload_info["x_oss_object_acl"],
+            "x-oss-forbid-overwrite": upload_info["x_oss_forbid_overwrite"],
+            "success_action_status": "200",
+            "x-oss-content-type": mimetypes.guess_type(str(wav_path))[0],
+        }
+        headers = {
+            "user-agent": get_user_agent(),
+            "Accept": "application/json",
+            "Date": format_date_time(mktime(datetime.now().timetuple())),
+        }
+
+        rospy.loginfo("DashScope ASR: uploading wav to temporary OSS")
+        try:
+            with wav_path.open("rb") as audio_file:
+                response = requests.post(
+                    upload_info["upload_host"],
+                    files={"file": audio_file},
+                    data=form_data,
+                    headers=headers,
+                    timeout=self._upload_timeout_sec,
+                )
+        except requests.Timeout as exc:
+            raise RuntimeError("DashScope ASR upload timed out after {:.1f}s".format(self._upload_timeout_sec)) from exc
+
+        if response.status_code != HTTPStatus.OK:
+            try:
+                error_message = OssUtils._decode_response_error(response=response)
+            except Exception:
+                error_message = response.text
+            raise UploadFileException("DashScope ASR OSS upload failed: {}".format(error_message))
+
+        rospy.loginfo("DashScope ASR: upload complete")
+        return "oss://" + form_data["key"]
 
     def _headers(self, async_task=False):
         headers = {
@@ -228,12 +350,13 @@ class DashScopeASR:
             self._api_base_url + "/services/audio/asr/transcription",
             headers=self._headers(async_task=True),
             json=payload,
-            timeout=30,
+            timeout=self._http_timeout_sec,
         )
         data = _dashscope_json(response, "DashScope ASR submit")
         task_id = _dict_get(_dict_get(data, "output"), "task_id")
         if not task_id:
             raise RuntimeError("DashScope ASR submit did not return task_id: {}".format(data))
+        rospy.loginfo("DashScope ASR: submitted task %s", task_id)
         return task_id
 
     def _wait_for_result_url(self, task_id):
@@ -242,21 +365,39 @@ class DashScopeASR:
         deadline = time.monotonic() + self._timeout_sec
         url = self._api_base_url + "/tasks/{}".format(task_id)
         while time.monotonic() < deadline:
-            response = requests.post(url, headers=self._headers(async_task=False), timeout=30)
+            response = requests.post(url, headers=self._headers(async_task=False), timeout=self._http_timeout_sec)
             data = _dashscope_json(response, "DashScope ASR poll")
             output = _dict_get(data, "output", {})
             task_status = _dict_get(output, "task_status", "")
+            rospy.loginfo("DashScope ASR: task %s status=%s", task_id, task_status or "<unknown>")
 
             if task_status == "SUCCEEDED":
                 results = _dict_get(output, "results", [])
                 if not results:
                     raise RuntimeError("DashScope ASR succeeded without results: {}".format(data))
-                result_url = _dict_get(results[0], "transcription_url")
-                if not result_url:
-                    raise RuntimeError("DashScope ASR result missing transcription_url: {}".format(data))
-                return result_url
+                for result in results:
+                    if _dict_get(result, "subtask_status", "SUCCEEDED") != "SUCCEEDED":
+                        continue
+                    result_url = _dict_get(result, "transcription_url")
+                    if result_url:
+                        return result_url
+                raise RuntimeError(
+                    "DashScope ASR succeeded without usable transcription_url: {}".format(
+                        _dashscope_results_summary(results)
+                    )
+                )
             if task_status in ("FAILED", "CANCELED"):
-                raise RuntimeError("DashScope ASR task {}: {}".format(task_status, data))
+                results = _dict_get(output, "results", [])
+                code = _dict_get(output, "code", "")
+                message = _dict_get(output, "message", "")
+                raise RuntimeError(
+                    "DashScope ASR task {} code={} message={} results={}".format(
+                        task_status,
+                        code,
+                        message,
+                        _dashscope_results_summary(results),
+                    )
+                )
 
             time.sleep(self._poll_interval_sec)
 
@@ -265,7 +406,8 @@ class DashScopeASR:
     def _download_transcription_text(self, result_url):
         import requests
 
-        response = requests.get(result_url, timeout=30)
+        rospy.loginfo("DashScope ASR: downloading transcription result")
+        response = requests.get(result_url, timeout=self._http_timeout_sec)
         data = _dashscope_json(response, "DashScope ASR result download")
         return _extract_dashscope_transcription_text(data)
 
@@ -610,6 +752,7 @@ class VoiceIONode:
         self.min_utterance_sec = float(_private_param("min_utterance_sec", 0.35))
         self.max_utterance_sec = float(_private_param("max_utterance_sec", 8.0))
         self.cooldown_sec = float(_private_param("cooldown_sec", 0.4))
+        self.vad_remove_dc_offset = bool(_private_param("vad_remove_dc_offset", True))
         self.publish_empty_result = bool(_private_param("publish_empty_result", False))
         self.pause_listening_while_speaking = bool(_private_param("pause_listening_while_speaking", True))
         self.input_device = _private_param("input_device", "")
@@ -787,7 +930,7 @@ class VoiceIONode:
                 continue
 
             now = time.monotonic()
-            rms = audioop.rms(block, 2) / 32768.0
+            rms = _pcm_rms(block, self.vad_remove_dc_offset)
 
             if not listening:
                 pre_roll.append(block)
