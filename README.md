@@ -1,72 +1,80 @@
 # asr4trailer
 
-ROS1 voice input/output bridge for VLN navigation. The node listens to the laptop microphone, publishes recognized text, and speaks text received from ROS.
+`asr4trailer` 是一个面向 VLN 导航的 ROS1 语音输入/输出桥接包。节点会监听本机笔记本麦克风，把识别到的语音文本发布到 ROS 话题；同时订阅 ROS 话题中的待播报文本，并通过本机扬声器播放。
 
-## Topics
+## 话题
 
-- Publishes `std_msgs/String` on `/vln/voice_input_text`
-- Subscribes `std_msgs/String` on `/vln/voice_output_text`
+- 发布 `std_msgs/String` 到 `/vln/voice_input_text`
+- 订阅 `std_msgs/String` 从 `/vln/voice_output_text`
 
-Both topic names can be changed by launch arguments or ROS remaps.
+两个话题名都可以通过 launch 参数或 ROS remap 修改。
 
-## Conda environment
+## Conda 环境
 
-Dependencies are isolated in a dedicated conda environment:
+所有 Python 依赖都隔离在独立 conda 环境 `asr4trailer_voice` 中：
 
 ```bash
 ./scripts/create_conda_env.sh
 ```
 
-The environment intentionally does not install `rospy`. The launcher sources ROS Noetic so conda Python imports `rospy` from `/opt/ros/noetic/lib/python3/dist-packages`.
-The environment creation script and launcher both set `PYTHONNOUSERSITE=1` so the node does not import Python packages from `~/.local`.
+该环境不会安装 `rospy`。启动脚本会 source ROS Noetic，使 conda Python 从 `/opt/ros/noetic/lib/python3/dist-packages` 导入 `rospy`。
 
-Check the environment:
+环境创建脚本和启动脚本都会设置 `PYTHONNOUSERSITE=1`，避免节点导入 `~/.local` 中的用户级 Python 包。
+
+检查环境：
 
 ```bash
 conda run -n asr4trailer_voice python -c "import sounddevice, vosk, openai; print('voice deps ok')"
 ```
 
-## Local backend
+## 本地后端
 
-Local ASR uses Vosk. Set `local/vosk_model_path` in `config/voice_io.yaml` to a Chinese Vosk model directory, for example `models/vosk-model-small-cn-0.22`.
+本地语音识别使用 Vosk。需要在 `config/voice_io.yaml` 中把 `local/vosk_model_path` 设置为中文 Vosk 模型目录，例如：
 
-Local TTS uses Piper when `local/piper_model_path` is set and a `piper` executable is available. Piper is treated as an optional external command because its phonemizer wheels are not always available from the configured pip mirror. If no Piper model is configured, the node falls back to `spd-say`.
+```yaml
+local:
+  vosk_model_path: models/vosk-model-small-cn-0.22
+```
 
-## OpenAI-compatible backend
+本地语音合成在配置 `local/piper_model_path` 且系统中存在 `piper` 可执行文件时使用 Piper。Piper 被当作可选外部命令处理，因为它的 phonemizer wheel 在部分 pip 镜像中不可用。
 
-Set:
+如果没有配置 Piper 模型，节点会回退到 `spd-say`。
+
+## OpenAI 兼容后端
+
+设置 API key：
 
 ```bash
 export OPENAI_API_KEY=...
 ```
 
-Optionally set:
+如需使用自定义 OpenAI 兼容服务地址，可选设置：
 
 ```bash
 export OPENAI_BASE_URL=...
 ```
 
-Launch with:
+使用 OpenAI 后端启动：
 
 ```bash
 ./scripts/run_voice_io_conda.sh asr_backend:=openai tts_backend:=openai
 ```
 
-## Run
+## 运行
 
-From this package directory:
+在本包目录下运行：
 
 ```bash
 ./scripts/run_voice_io_conda.sh
 ```
 
-Publish speech output text:
+发布待播报文本：
 
 ```bash
 rostopic pub -1 /vln/voice_output_text std_msgs/String "data: '已经到达目的地啦'"
 ```
 
-Echo recognized input text:
+查看识别到的语音输入文本：
 
 ```bash
 rostopic echo /vln/voice_input_text
