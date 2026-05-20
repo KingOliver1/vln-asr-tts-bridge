@@ -131,3 +131,5 @@ conda run -n asr4trailer_voice python scripts/test_microphone_input.py --list-de
 ```
 
 脚本会录制几秒音频，保存到 `/tmp/asr4trailer_mic_test.wav`，并输出电平、当前阈值是否会触发、以及 Vosk 对测试录音的识别结果。
+
+如果脚本显示 Vosk 能识别出文字但 `当前 VAD 是否会触发: 否`，说明麦克风和本地识别可用，问题在能量阈值。当前本地后端默认启用 `local/vosk_streaming: true`，节点会用 Vosk 自带端点检测发布识别文本，不再依赖 RMS 阈值。

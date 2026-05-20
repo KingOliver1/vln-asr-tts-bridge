@@ -127,6 +127,15 @@ class LocalVoskASR:
         result = json.loads(recognizer.FinalResult())
         return result.get("text", "").strip()
 
+    def create_stream_recognizer(self):
+        return self._vosk.KaldiRecognizer(self._model, self._sample_rate)
+
+    def accept_stream_block(self, recognizer, pcm_bytes):
+        if not recognizer.AcceptWaveform(pcm_bytes):
+            return None
+        result = json.loads(recognizer.Result())
+        return result.get("text", "").strip()
+
 
 class OpenAIASR:
     def __init__(self, sample_rate, channels):
@@ -606,10 +615,11 @@ class VoiceIONode:
         self.input_device = _private_param("input_device", "")
         self.audio_capture_backend = str(_private_param("audio_capture_backend", "sounddevice")).lower()
         self.start_trigger_blocks = max(1, int(_private_param("start_trigger_blocks", 1)))
+        self.local_vosk_streaming = bool(_private_param("local/vosk_streaming", True))
 
         input_text_topic = _private_param("input_text_topic", "/vln/voice_input_text")
         output_text_topic = _private_param("output_text_topic", "/vln/voice_output_text")
-        asr_backend = _private_param("asr_backend", "local").lower()
+        self.asr_backend = _private_param("asr_backend", "local").lower()
         tts_backend = _private_param("tts_backend", "local").lower()
 
         self.input_pub = rospy.Publisher(input_text_topic, String, queue_size=10)
@@ -617,7 +627,7 @@ class VoiceIONode:
         self.tts_queue = queue.Queue()
         self.tts_active = threading.Event()
 
-        self.asr = self._make_asr(asr_backend)
+        self.asr = self._make_asr(self.asr_backend)
         self.tts = self._make_tts(tts_backend)
 
         self.capture_thread = threading.Thread(target=self._capture_loop, name="voice_capture", daemon=True)
@@ -625,7 +635,7 @@ class VoiceIONode:
 
         rospy.loginfo(
             "voice_io_node ready: ASR=%s TTS=%s input_topic=%s output_topic=%s sample_rate=%d",
-            asr_backend,
+            self.asr_backend,
             tts_backend,
             input_text_topic,
             output_text_topic,
@@ -689,7 +699,7 @@ class VoiceIONode:
                         "Listening for speech with parec on input device: %s",
                         device if device is not None else "default",
                     )
-                    self._read_utterances(stream, pre_roll)
+                    self._read_capture_stream(stream, pre_roll)
             elif self.audio_capture_backend == "sounddevice":
                 try:
                     import sounddevice as sd
@@ -709,7 +719,7 @@ class VoiceIONode:
                         "Listening for speech with sounddevice on input device: %s",
                         device if device is not None else "default",
                     )
-                    self._read_utterances(stream, pre_roll)
+                    self._read_capture_stream(stream, pre_roll)
             else:
                 raise RuntimeError("unsupported audio_capture_backend: {}".format(self.audio_capture_backend))
         except EOFError as exc:
@@ -720,6 +730,40 @@ class VoiceIONode:
                 return
             rospy.logfatal("microphone capture failed: %s", exc)
             rospy.signal_shutdown("microphone capture failed")
+
+    def _read_capture_stream(self, stream, pre_roll):
+        if self.asr_backend == "local" and self.local_vosk_streaming:
+            self._read_vosk_stream(stream)
+            return
+        self._read_utterances(stream, pre_roll)
+
+    def _read_vosk_stream(self, stream):
+        recognizer = self.asr.create_stream_recognizer()
+        rospy.loginfo("Using Vosk streaming endpoint detection for local ASR")
+
+        while not rospy.is_shutdown():
+            data, overflowed = stream.read(self.block_size)
+            if overflowed:
+                rospy.logwarn_throttle(5.0, "microphone input overflow")
+
+            if self.pause_listening_while_speaking and self.tts_active.is_set():
+                recognizer = self.asr.create_stream_recognizer()
+                continue
+
+            try:
+                text = self.asr.accept_stream_block(recognizer, bytes(data))
+            except Exception as exc:
+                rospy.logerr("Vosk streaming ASR failed: %s", exc)
+                recognizer = self.asr.create_stream_recognizer()
+                continue
+
+            if text is None:
+                continue
+            if text or self.publish_empty_result:
+                self.input_pub.publish(String(data=text))
+                rospy.loginfo("Published ASR text: %s", text if text else "<empty>")
+            else:
+                rospy.loginfo("Vosk streaming returned empty text; nothing published")
 
     def _read_utterances(self, stream, pre_roll):
         listening = False

@@ -227,6 +227,10 @@ def print_conclusion(analysis, vosk_text):
     if analysis["rms_peak"] < 0.01 and analysis["sample_peak"] < 0.03:
         print("  录音几乎没有有效信号，优先检查麦克风设备、系统输入源、静音和权限。")
         return
+    if not analysis["vad_triggered"] and vosk_text:
+        print("  麦克风和本地 Vosk 都可用；问题是能量 VAD 阈值不适合这路输入。")
+        print("  当前节点默认启用 local/vosk_streaming，让 Vosk 自己做端点检测，不再依赖 RMS 阈值。")
+        return
     if not analysis["vad_triggered"]:
         print("  麦克风录到了声音，但当前 VAD 阈值没有触发。")
         print("  可以降低 config/voice_io.yaml 里的 start_threshold/stop_threshold，或靠近麦克风重试。")

@@ -3,6 +3,7 @@ import importlib.util
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from http import HTTPStatus
@@ -123,6 +124,44 @@ class DashScopeVoiceIOTests(unittest.TestCase):
                     tts = self.node.DashScopeTTS()
 
         self.assertEqual(tts._voice, "voice-test")
+
+
+class LocalVoskStreamingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.node = load_voice_io_node()
+
+    def test_vosk_streaming_publishes_final_text(self):
+        voice_node = self.node.VoiceIONode.__new__(self.node.VoiceIONode)
+        voice_node.block_size = 4
+        voice_node.pause_listening_while_speaking = False
+        voice_node.publish_empty_result = False
+        voice_node.tts_active = threading.Event()
+        published = []
+        voice_node.input_pub = types.SimpleNamespace(publish=lambda msg: published.append(msg.data))
+
+        class FakeASR:
+            def __init__(self):
+                self.calls = 0
+
+            def create_stream_recognizer(self):
+                return object()
+
+            def accept_stream_block(self, _recognizer, _pcm_bytes):
+                self.calls += 1
+                if self.calls == 2:
+                    return "我 要 去 实验室"
+                return None
+
+        class FakeStream:
+            def read(self, _block_size):
+                return b"\x00" * 8, False
+
+        voice_node.asr = FakeASR()
+        with mock.patch.object(self.node.rospy, "is_shutdown", side_effect=[False, False, True]):
+            voice_node._read_vosk_stream(FakeStream())
+
+        self.assertEqual(published, ["我 要 去 实验室"])
 
 
 if __name__ == "__main__":
