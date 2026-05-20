@@ -1,0 +1,15 @@
+<launch>
+  <arg name="config_file" default="$(find asr4trailer)/config/voice_io.yaml" />
+  <arg name="asr_backend" default="local" />
+  <arg name="tts_backend" default="local" />
+  <arg name="input_text_topic" default="/vln/voice_input_text" />
+  <arg name="output_text_topic" default="/vln/voice_output_text" />
+
+  <node pkg="asr4trailer" type="voice_io_node.py" name="voice_io_node" output="screen" required="false">
+    <rosparam command="load" file="$(arg config_file)" />
+    <param name="asr_backend" value="$(arg asr_backend)" />
+    <param name="tts_backend" value="$(arg tts_backend)" />
+    <param name="input_text_topic" value="$(arg input_text_topic)" />
+    <param name="output_text_topic" value="$(arg output_text_topic)" />
+  </node>
+</launch>

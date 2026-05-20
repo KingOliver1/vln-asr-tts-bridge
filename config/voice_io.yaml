@@ -1,0 +1,58 @@
+# Parameters are loaded into the private namespace of voice_io_node.
+
+input_text_topic: /vln/voice_input_text
+output_text_topic: /vln/voice_output_text
+
+# local or openai. They can be selected independently.
+asr_backend: local
+tts_backend: local
+
+language: zh
+sample_rate: 16000
+channels: 1
+input_device: ""
+
+# Energy-based utterance detection. RMS is normalized to 0.0 - 1.0.
+block_duration_ms: 30
+start_threshold: 0.018
+stop_threshold: 0.012
+pre_roll_sec: 0.35
+end_silence_sec: 0.8
+min_utterance_sec: 0.35
+max_utterance_sec: 8.0
+cooldown_sec: 0.4
+publish_empty_result: false
+pause_listening_while_speaking: true
+
+local:
+  # Required for local ASR. Example:
+  # /home/tianbot/trailer/Asr4trailer/models/vosk-model-small-cn-0.22
+  vosk_model_path: ""
+
+  # Optional for local TTS. If empty, fallback_tts_cmd is used.
+  piper_executable: piper
+  piper_model_path: ""
+  piper_config_path: ""
+
+  # Commands are argv lists, not shell strings. Placeholders:
+  # {audio_file}: generated speech audio path
+  # {text}: text to speak
+  audio_player_cmd:
+    - ffplay
+    - -nodisp
+    - -autoexit
+    - -loglevel
+    - error
+    - "{audio_file}"
+  fallback_tts_cmd:
+    - spd-say
+    - "{text}"
+
+openai:
+  api_key_env: OPENAI_API_KEY
+  base_url_env: OPENAI_BASE_URL
+  base_url: ""
+  asr_model: gpt-4o-mini-transcribe
+  tts_model: gpt-4o-mini-tts
+  tts_voice: alloy
+  tts_format: wav

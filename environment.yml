@@ -1,0 +1,13 @@
+name: asr4trailer_voice
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pip
+  - portaudio
+  - ffmpeg
+  - pip:
+      - sounddevice>=0.4.6
+      - vosk>=0.3.45
+      - openai>=1.30.0
