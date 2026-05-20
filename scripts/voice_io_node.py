@@ -505,6 +505,7 @@ def _extract_dashscope_transcription_text(data):
         text = _dict_get(item, "text", "")
         if text:
             transcripts.append(str(text).strip())
+            continue
         for sentence in _dict_get(item, "sentences", []) or []:
             sentence_text = _dict_get(sentence, "text", "")
             if sentence_text:
