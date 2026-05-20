@@ -8,9 +8,9 @@ asr_backend: local
 tts_backend: local
 
 language: zh
-sample_rate: 16000
+sample_rate: 48000
 channels: 1
-input_device: ""
+input_device: 6
 
 # Energy-based utterance detection. RMS is normalized to 0.0 - 1.0.
 block_duration_ms: 30
