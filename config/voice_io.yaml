@@ -29,7 +29,7 @@ pause_listening_while_speaking: true
 local:
   # Required for local ASR. Example:
   # /home/tianbot/trailer/Asr4trailer/models/vosk-model-small-cn-0.22
-  vosk_model_path: /home/tianbot/trailer/Asr4trailer/models/vosk-model-small-cn-0.22
+  vosk_model_path: /home/tianbot/trailer/Asr4trailer/models/vosk-model-cn-0.22
   # For local Vosk, use Vosk endpoint detection instead of RMS VAD.
   # This is more reliable on the current digital microphone input.
   vosk_streaming: true

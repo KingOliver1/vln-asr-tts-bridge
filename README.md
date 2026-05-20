@@ -33,7 +33,19 @@ conda run -n asr4trailer_voice python -c "import sounddevice, vosk, openai; prin
 
 ```yaml
 local:
-  vosk_model_path: models/vosk-model-small-cn-0.22
+  vosk_model_path: models/vosk-model-cn-0.22
+```
+
+当前默认使用 Vosk 中文大模型：
+
+```text
+/home/tianbot/trailer/Asr4trailer/models/vosk-model-cn-0.22
+```
+
+原来的轻量模型仍保留在：
+
+```text
+/home/tianbot/trailer/Asr4trailer/models/vosk-model-small-cn-0.22
 ```
 
 本地语音合成在配置 `local/piper_model_path` 且系统中存在 `piper` 可执行文件时使用 Piper。Piper 被当作可选外部命令处理，因为它的 phonemizer wheel 在部分 pip 镜像中不可用。
