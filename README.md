@@ -123,3 +123,11 @@ pactl list short sources
 ```bash
 conda run -n asr4trailer_voice python -c "import sounddevice as sd; print(sd.query_devices())"
 ```
+
+测试麦克风、VAD 阈值和本地 Vosk 识别：
+
+```bash
+conda run -n asr4trailer_voice python scripts/test_microphone_input.py --list-devices
+```
+
+脚本会录制几秒音频，保存到 `/tmp/asr4trailer_mic_test.wav`，并输出电平、当前阈值是否会触发、以及 Vosk 对测试录音的识别结果。
