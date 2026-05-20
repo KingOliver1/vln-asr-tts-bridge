@@ -185,6 +185,8 @@ def _make_openai_client():
     except ImportError as exc:
         raise RuntimeError("OpenAI backend requires the openai Python package in the conda env") from exc
 
+    _normalize_socks_proxy_env()
+
     api_key_env = _private_param("openai/api_key_env", "OPENAI_API_KEY")
     base_url_env = _private_param("openai/base_url_env", "OPENAI_BASE_URL")
     api_key = os.environ.get(api_key_env, "")
@@ -197,6 +199,13 @@ def _make_openai_client():
     if base_url:
         kwargs["base_url"] = base_url
     return OpenAI(**kwargs)
+
+
+def _normalize_socks_proxy_env():
+    for name in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"):
+        value = os.environ.get(name, "")
+        if value.startswith("socks://"):
+            os.environ[name] = "socks5://" + value[len("socks://") :]
 
 
 def _save_openai_audio_response(response, audio_path):

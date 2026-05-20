@@ -14,3 +14,4 @@ dependencies:
       - sounddevice>=0.4.6
       - vosk>=0.3.45
       - openai>=1.30.0
+      - socksio>=1.0.0
