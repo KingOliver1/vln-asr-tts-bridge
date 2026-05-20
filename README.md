@@ -2,7 +2,7 @@
 
 `vln-asr-tts-bridge` 是一个面向 VLN 导航任务的 ROS1 语音桥接包。它把麦克风语音通过 ASR 转成文本发布到 ROS 话题，同时订阅 ROS 话题中的文本并通过 TTS 播放语音。
 
-ROS 包名是 `vln_asr_tts_bridge`，仓库名建议使用 `vln-asr-tts-bridge`。当前已完整测试的云端模型为阿里云 Model Studio / DashScope；OpenAI 兼容后端保留在代码中，但当前主要验证链路是阿里云。
+当前已完整测试的云端模型为阿里云 Model Studio / DashScope；OpenAI 兼容后端保留在代码中，但当前主要验证链路是阿里云。本地模型也已经完整测试成功。
 
 ## 功能
 
@@ -22,11 +22,7 @@ cd vln-asr-tts-bridge
 ./scripts/create_conda_env.sh
 ```
 
-Conda 环境名默认为 `vln_asr_tts_voice`。如果你还在使用旧环境 `asr4trailer_voice`，可以临时这样启动：
-
-```bash
-ASR4TRAILER_CONDA_ENV=asr4trailer_voice ./scripts/run_voice_io_conda.sh
-```
+Conda 环境名默认为 `vln_asr_tts_voice`。
 
 检查依赖：
 
@@ -145,8 +141,6 @@ export OPENAI_BASE_URL=可选的兼容服务地址
 ./scripts/run_voice_io_conda.sh asr_backend:=openai tts_backend:=openai
 ```
 
-该后端不是当前主要测试链路。
-
 ## 麦克风排查
 
 当前默认使用 PulseAudio 的 `parec` 采集：
@@ -201,22 +195,3 @@ cloud_asr_remove_dc_offset: true
 
 如果无声环境也频繁触发 `Speech started`，适当提高 `start_threshold`，例如 `0.015` 或 `0.020`。如果说话不触发，降低 `start_threshold` 或检查麦克风输入设备。
 
-## 仓库改名
-
-本地目录建议改为：
-
-```bash
-mv Asr4trailer vln-asr-tts-bridge
-```
-
-GitHub 仓库建议从 `KingOliver1/Asr4trailer` 改名为：
-
-```text
-KingOliver1/vln-asr-tts-bridge
-```
-
-改名后更新远端地址：
-
-```bash
-git remote set-url origin https://github.com/KingOliver1/vln-asr-tts-bridge.git
-```

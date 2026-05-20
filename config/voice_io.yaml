@@ -88,7 +88,7 @@ dashscope:
   # If tts_voice is empty, the node creates a voice from tts_voice_prompt at startup.
   # To avoid creating a new cloud voice on every launch, set tts_voice to a saved voice_id.
   tts_model: qwen3-tts-vd-2026-01-26
-  tts_voice: ""
+  tts_voice: "qwen-tts-vd-trailer_voice-voice-20260520211924773-b6af"
   tts_language_type: ""
   tts_format: wav
   tts_sample_rate: 24000
