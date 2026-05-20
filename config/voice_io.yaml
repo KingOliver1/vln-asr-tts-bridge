@@ -27,12 +27,12 @@ pause_listening_while_speaking: true
 local:
   # Required for local ASR. Example:
   # /home/tianbot/trailer/Asr4trailer/models/vosk-model-small-cn-0.22
-  vosk_model_path: ""
+  vosk_model_path: /home/tianbot/trailer/Asr4trailer/models/vosk-model-small-cn-0.22
 
   # Optional for local TTS. If empty, fallback_tts_cmd is used.
-  piper_executable: piper
-  piper_model_path: ""
-  piper_config_path: ""
+  piper_executable: /home/tianbot/trailer/Asr4trailer/tools/piper/piper
+  piper_model_path: /home/tianbot/trailer/Asr4trailer/models/piper/zh_CN_huayan_medium/zh_CN-huayan-medium.onnx
+  piper_config_path: /home/tianbot/trailer/Asr4trailer/models/piper/zh_CN_huayan_medium/zh_CN-huayan-medium.onnx.json
 
   # Commands are argv lists, not shell strings. Placeholders:
   # {audio_file}: generated speech audio path
