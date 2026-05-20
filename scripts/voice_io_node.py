@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import audioop
+import base64
 import json
 import os
 import queue
@@ -11,6 +12,7 @@ import threading
 import time
 import wave
 from collections import deque
+from http import HTTPStatus
 from pathlib import Path
 
 import rospy
@@ -46,6 +48,60 @@ def _write_wav(path, pcm_bytes, sample_rate, channels):
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(pcm_bytes)
+
+
+def _audio_player_cmd():
+    return _command_param(
+        "local/audio_player_cmd",
+        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "{audio_file}"],
+    )
+
+
+def _dashscope_param(name, default=None):
+    return _private_param("dashscope/" + name, default)
+
+
+def _dashscope_api_key():
+    api_key_env = _dashscope_param("api_key_env", "DASHSCOPE_API_KEY")
+    api_key = os.environ.get(api_key_env, "")
+    if not api_key:
+        raise RuntimeError("{} is required for the DashScope backend".format(api_key_env))
+    return api_key
+
+
+def _dashscope_api_base_url():
+    return str(_dashscope_param("base_http_api_url", "https://dashscope.aliyuncs.com/api/v1")).rstrip("/")
+
+
+def _dashscope_json(response, action):
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError("{} failed: non-json response status={}".format(action, response.status_code)) from exc
+
+    if response.status_code != HTTPStatus.OK:
+        message = data.get("message") or data.get("code") or response.text
+        raise RuntimeError("{} failed: status={} message={}".format(action, response.status_code, message))
+    return data
+
+
+def _dashscope_status_error(response, action):
+    status_code = getattr(response, "status_code", None)
+    if status_code == HTTPStatus.OK:
+        return
+    code = getattr(response, "code", "")
+    message = getattr(response, "message", "")
+    raise RuntimeError("{} failed: status={} code={} message={}".format(action, status_code, code, message))
+
+
+def _dict_get(data, key, default=None):
+    if data is None:
+        return default
+    if isinstance(data, dict):
+        return data.get(key, default)
+    if hasattr(data, "get"):
+        return data.get(key, default)
+    return getattr(data, key, default)
 
 
 class LocalVoskASR:
@@ -98,15 +154,119 @@ class OpenAIASR:
             wav_path.unlink(missing_ok=True)
 
 
+class DashScopeASR:
+    def __init__(self, sample_rate, channels):
+        self._sample_rate = sample_rate
+        self._channels = channels
+        self._api_key = _dashscope_api_key()
+        self._api_base_url = _dashscope_api_base_url()
+        self._model = _dashscope_param("asr_model", "fun-asr-mtl")
+        self._poll_interval_sec = float(_dashscope_param("asr_poll_interval_sec", 1.0))
+        self._timeout_sec = float(_dashscope_param("asr_timeout_sec", 120.0))
+        self._language_hints = _dashscope_param("asr_language_hints", [_private_param("language", "zh")])
+        self._channel_id = _dashscope_param("asr_channel_id", [0])
+
+    def transcribe(self, pcm_bytes):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            wav_path = Path(tmp_file.name)
+        try:
+            _write_wav(wav_path, pcm_bytes, self._sample_rate, self._channels)
+            file_url = self._upload_audio(wav_path)
+            task_id = self._submit_task(file_url)
+            result_url = self._wait_for_result_url(task_id)
+            return self._download_transcription_text(result_url)
+        finally:
+            wav_path.unlink(missing_ok=True)
+
+    def _upload_audio(self, wav_path):
+        try:
+            from dashscope.utils.oss_utils import OssUtils
+        except ImportError as exc:
+            raise RuntimeError("DashScope ASR requires the dashscope Python package in the conda env") from exc
+
+        file_url, _ = OssUtils.upload(model=self._model, file_path=str(wav_path), api_key=self._api_key)
+        if not file_url:
+            raise RuntimeError("DashScope ASR upload returned empty file URL")
+        return file_url
+
+    def _headers(self, async_task=False):
+        headers = {
+            "Authorization": "Bearer {}".format(self._api_key),
+            "Content-Type": "application/json",
+            "X-DashScope-OssResourceResolve": "enable",
+        }
+        if async_task:
+            headers["X-DashScope-Async"] = "enable"
+        return headers
+
+    def _submit_task(self, file_url):
+        import requests
+
+        parameters = {}
+        if self._language_hints:
+            parameters["language_hints"] = self._language_hints
+        if self._channel_id not in ("", None):
+            parameters["channel_id"] = self._channel_id
+
+        payload = {
+            "model": self._model,
+            "input": {"file_urls": [file_url]},
+        }
+        if parameters:
+            payload["parameters"] = parameters
+
+        response = requests.post(
+            self._api_base_url + "/services/audio/asr/transcription",
+            headers=self._headers(async_task=True),
+            json=payload,
+            timeout=30,
+        )
+        data = _dashscope_json(response, "DashScope ASR submit")
+        task_id = _dict_get(_dict_get(data, "output"), "task_id")
+        if not task_id:
+            raise RuntimeError("DashScope ASR submit did not return task_id: {}".format(data))
+        return task_id
+
+    def _wait_for_result_url(self, task_id):
+        import requests
+
+        deadline = time.monotonic() + self._timeout_sec
+        url = self._api_base_url + "/tasks/{}".format(task_id)
+        while time.monotonic() < deadline:
+            response = requests.get(url, headers=self._headers(async_task=False), timeout=30)
+            data = _dashscope_json(response, "DashScope ASR poll")
+            output = _dict_get(data, "output", {})
+            task_status = _dict_get(output, "task_status", "")
+
+            if task_status == "SUCCEEDED":
+                results = _dict_get(output, "results", [])
+                if not results:
+                    raise RuntimeError("DashScope ASR succeeded without results: {}".format(data))
+                result_url = _dict_get(results[0], "transcription_url")
+                if not result_url:
+                    raise RuntimeError("DashScope ASR result missing transcription_url: {}".format(data))
+                return result_url
+            if task_status in ("FAILED", "CANCELED"):
+                raise RuntimeError("DashScope ASR task {}: {}".format(task_status, data))
+
+            time.sleep(self._poll_interval_sec)
+
+        raise RuntimeError("DashScope ASR task timed out after {:.1f}s".format(self._timeout_sec))
+
+    def _download_transcription_text(self, result_url):
+        import requests
+
+        response = requests.get(result_url, timeout=30)
+        data = _dashscope_json(response, "DashScope ASR result download")
+        return _extract_dashscope_transcription_text(data)
+
+
 class LocalTTS:
     def __init__(self):
         self._piper_executable = _private_param("local/piper_executable", "piper")
         self._piper_model_path = _private_param("local/piper_model_path", "")
         self._piper_config_path = _private_param("local/piper_config_path", "")
-        self._audio_player_cmd = _command_param(
-            "local/audio_player_cmd",
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "{audio_file}"],
-        )
+        self._audio_player_cmd = _audio_player_cmd()
         self._fallback_tts_cmd = _command_param("local/fallback_tts_cmd", ["spd-say", "{text}"])
 
     def speak(self, text):
@@ -156,10 +316,7 @@ class OpenAITTS:
         self._model = _private_param("openai/tts_model", "gpt-4o-mini-tts")
         self._voice = _private_param("openai/tts_voice", "alloy")
         self._response_format = _private_param("openai/tts_format", "wav")
-        self._audio_player_cmd = _command_param(
-            "local/audio_player_cmd",
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "{audio_file}"],
-        )
+        self._audio_player_cmd = _audio_player_cmd()
 
     def speak(self, text):
         suffix = "." + self._response_format.lstrip(".")
@@ -177,6 +334,106 @@ class OpenAITTS:
             _run_checked(cmd, "audio player")
         finally:
             audio_path.unlink(missing_ok=True)
+
+
+class DashScopeTTS:
+    def __init__(self):
+        self._api_key = _dashscope_api_key()
+        self._model = _dashscope_param("tts_model", "qwen3-tts-vd-2026-01-26")
+        self._voice = _dashscope_param("tts_voice", "")
+        self._language_type = _dashscope_param("tts_language_type", "")
+        self._response_format = _dashscope_param("tts_format", "wav")
+        self._workspace = _dashscope_param("workspace", None) or None
+        self._audio_player_cmd = _audio_player_cmd()
+        self._configure_dashscope_base_url()
+        if not self._voice:
+            self._voice = self._create_voice()
+
+    def speak(self, text):
+        from dashscope.audio.qwen_tts import SpeechSynthesizer
+
+        kwargs = {
+            "model": self._model,
+            "text": text,
+            "voice": self._voice,
+            "api_key": self._api_key,
+            "workspace": self._workspace,
+        }
+        if self._language_type:
+            kwargs["language_type"] = self._language_type
+        if self._response_format:
+            kwargs["response_format"] = self._response_format
+        sample_rate = _dashscope_param("tts_sample_rate", "")
+        if sample_rate not in ("", None):
+            kwargs["sample_rate"] = int(sample_rate)
+
+        response = SpeechSynthesizer.call(**kwargs)
+        _dashscope_status_error(response, "DashScope TTS")
+        audio = _dict_get(_dict_get(response, "output"), "audio")
+        if not audio:
+            raise RuntimeError("DashScope TTS response missing output.audio: {}".format(response))
+
+        suffix = "." + self._response_format.lstrip(".")
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+            audio_path = Path(tmp_file.name)
+        try:
+            _save_dashscope_audio(audio, audio_path)
+            cmd = _expand_command(self._audio_player_cmd, audio_file=str(audio_path))
+            _run_checked(cmd, "audio player")
+        finally:
+            audio_path.unlink(missing_ok=True)
+
+    def _configure_dashscope_base_url(self):
+        try:
+            import dashscope
+        except ImportError as exc:
+            raise RuntimeError("DashScope TTS requires the dashscope Python package in the conda env") from exc
+
+        base_url = _dashscope_param("base_http_api_url", "")
+        if base_url:
+            dashscope.base_http_api_url = base_url.rstrip("/")
+
+    def _create_voice(self):
+        import requests
+
+        voice_prompt = _dashscope_param("tts_voice_prompt", "")
+        if not voice_prompt:
+            raise RuntimeError("~dashscope/tts_voice is required, or set ~dashscope/tts_voice_prompt to create one")
+
+        payload = {
+            "model": "qwen-voice-design",
+            "input": {
+                "action": "create",
+                "target_model": self._model,
+                "voice_prompt": voice_prompt,
+                "preview_text": _dashscope_param("tts_voice_preview_text", "已经到达目的地啦"),
+                "preferred_name": _dashscope_param("tts_voice_preferred_name", "trailer_voice"),
+            },
+            "parameters": {
+                "sample_rate": int(_dashscope_param("tts_voice_sample_rate", 24000)),
+                "response_format": _dashscope_param("tts_format", "wav"),
+            },
+        }
+        language = _dashscope_param("tts_voice_language", "")
+        if language:
+            payload["input"]["language"] = language
+
+        response = requests.post(
+            _dashscope_api_base_url() + "/services/audio/tts/customization",
+            headers={
+                "Authorization": "Bearer {}".format(self._api_key),
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=60,
+        )
+        data = _dashscope_json(response, "DashScope voice design")
+        output = _dict_get(data, "output", {})
+        voice = _dict_get(output, "voice_id") or _dict_get(output, "voice") or _dict_get(output, "voice_name")
+        if not voice:
+            raise RuntimeError("DashScope voice design did not return a voice id: {}".format(data))
+        rospy.loginfo("Created DashScope TTS voice: %s", voice)
+        return voice
 
 
 def _make_openai_client():
@@ -218,6 +475,49 @@ def _save_openai_audio_response(response, audio_path):
     if content is None:
         raise RuntimeError("OpenAI speech response did not expose audio bytes")
     audio_path.write_bytes(content)
+
+
+def _save_dashscope_audio(audio, audio_path):
+    audio_data = _dict_get(audio, "data")
+    audio_url = _dict_get(audio, "url")
+    if audio_data:
+        audio_path.write_bytes(base64.b64decode(audio_data))
+        return
+    if audio_url:
+        import requests
+
+        response = requests.get(audio_url, timeout=60)
+        if response.status_code != HTTPStatus.OK:
+            raise RuntimeError(
+                "DashScope TTS audio download failed: status={} message={}".format(
+                    response.status_code,
+                    response.text,
+                )
+            )
+        audio_path.write_bytes(response.content)
+        return
+    raise RuntimeError("DashScope TTS audio response has no data or url: {}".format(audio))
+
+
+def _extract_dashscope_transcription_text(data):
+    transcripts = []
+    for item in _dict_get(data, "transcripts", []) or []:
+        text = _dict_get(item, "text", "")
+        if text:
+            transcripts.append(str(text).strip())
+
+    if not transcripts:
+        for item in _dict_get(data, "sentences", []) or []:
+            text = _dict_get(item, "text", "")
+            if text:
+                transcripts.append(str(text).strip())
+
+    if not transcripts:
+        text = _dict_get(data, "text", "")
+        if text:
+            transcripts.append(str(text).strip())
+
+    return " ".join(text for text in transcripts if text).strip()
 
 
 def _run_checked(cmd, label):
@@ -280,6 +580,8 @@ class VoiceIONode:
             return LocalVoskASR(self.sample_rate)
         if backend == "openai":
             return OpenAIASR(self.sample_rate, self.channels)
+        if backend == "dashscope":
+            return DashScopeASR(self.sample_rate, self.channels)
         raise RuntimeError("unsupported asr_backend: {}".format(backend))
 
     def _make_tts(self, backend):
@@ -287,6 +589,8 @@ class VoiceIONode:
             return LocalTTS()
         if backend == "openai":
             return OpenAITTS()
+        if backend == "dashscope":
+            return DashScopeTTS()
         raise RuntimeError("unsupported tts_backend: {}".format(backend))
 
     def _tts_callback(self, msg):

@@ -3,7 +3,7 @@
 input_text_topic: /vln/voice_input_text
 output_text_topic: /vln/voice_output_text
 
-# local or openai. They can be selected independently.
+# local, openai, or dashscope. They can be selected independently.
 asr_backend: local
 tts_backend: local
 
@@ -56,3 +56,32 @@ openai:
   tts_model: gpt-4o-mini-tts
   tts_voice: alloy
   tts_format: wav
+
+dashscope:
+  api_key_env: DASHSCOPE_API_KEY
+  base_http_api_url: https://dashscope.aliyuncs.com/api/v1
+  workspace: ""
+
+  # Cloud ASR: Alibaba Cloud Model Studio / DashScope Fun-ASR.
+  # The recorded audio is uploaded to temporary OSS, then submitted as an async task.
+  asr_model: fun-asr-mtl
+  asr_language_hints:
+    - zh
+  asr_channel_id:
+    - 0
+  asr_poll_interval_sec: 1.0
+  asr_timeout_sec: 120.0
+
+  # Cloud TTS: Qwen3-TTS Voice Design target model.
+  # If tts_voice is empty, the node creates a voice from tts_voice_prompt at startup.
+  # To avoid creating a new cloud voice on every launch, set tts_voice to a saved voice_id.
+  tts_model: qwen3-tts-vd-2026-01-26
+  tts_voice: ""
+  tts_language_type: ""
+  tts_format: wav
+  tts_sample_rate: 24000
+  tts_voice_prompt: "清晰、自然、简洁的中文导航播报女声，语速适中，适合机器人到达目的地提示。"
+  tts_voice_preferred_name: trailer_voice
+  tts_voice_preview_text: "已经到达目的地啦"
+  tts_voice_language: zh
+  tts_voice_sample_rate: 24000

@@ -40,6 +40,29 @@ local:
 
 如果没有配置 Piper 模型，节点会回退到 `spd-say`。
 
+## 准备的模型
+
+云端后端已适配阿里云 Model Studio / DashScope：
+
+- ASR：`fun-asr-mtl`
+- TTS：`qwen3-tts-vd-2026-01-26`
+
+使用前设置 DashScope API key：
+
+```bash
+export DASHSCOPE_API_KEY=你的_api_key
+```
+
+启动云端语音识别和语音合成：
+
+```bash
+./scripts/run_voice_io_conda.sh asr_backend:=dashscope tts_backend:=dashscope
+```
+
+`fun-asr-mtl` 识别本机麦克风录音时，节点会把临时 wav 上传到 DashScope 临时 OSS，再提交识别任务，识别文本发布到 `/vln/voice_input_text`。
+
+`qwen3-tts-vd-2026-01-26` 需要一个 Voice Design 声音。可以在 `config/voice_io.yaml` 中设置 `dashscope/tts_voice` 为已经创建好的 `voice_id`；如果留空，节点启动时会用 `dashscope/tts_voice_prompt` 自动创建一个声音并用于播报。
+
 ## OpenAI 兼容后端
 
 设置 API key：
