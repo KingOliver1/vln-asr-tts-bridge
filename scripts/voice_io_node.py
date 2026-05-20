@@ -436,6 +436,60 @@ class DashScopeTTS:
         return voice
 
 
+class ParecInputStream:
+    def __init__(self, sample_rate, block_size, channels, device):
+        self._sample_rate = sample_rate
+        self._block_size = block_size
+        self._channels = channels
+        self._device = device
+        self._process = None
+        self._bytes_per_block = block_size * channels * 2
+        self._executable = _private_param("parec/executable", "parec")
+
+    def __enter__(self):
+        executable = shutil.which(self._executable) or self._executable
+        cmd = [
+            executable,
+            "--record",
+            "--format=s16le",
+            "--rate={}".format(self._sample_rate),
+            "--channels={}".format(self._channels),
+            "--latency={}".format(self._bytes_per_block * 2),
+        ]
+        if self._device not in ("", None):
+            cmd.append("--device={}".format(self._device))
+
+        rospy.logdebug("Running PulseAudio capture command: %s", cmd)
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self._process is None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=2)
+
+    def read(self, _block_size):
+        chunks = []
+        remaining = self._bytes_per_block
+        while remaining > 0:
+            chunk = self._process.stdout.read(remaining)
+            if not chunk:
+                stderr = self._process.stderr.read().decode("utf-8", errors="replace")
+                raise EOFError("parec capture ended: {}".format(stderr.strip()))
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks), False
+
+
 def _make_openai_client():
     try:
         from openai import OpenAI
@@ -550,6 +604,8 @@ class VoiceIONode:
         self.publish_empty_result = bool(_private_param("publish_empty_result", False))
         self.pause_listening_while_speaking = bool(_private_param("pause_listening_while_speaking", True))
         self.input_device = _private_param("input_device", "")
+        self.audio_capture_backend = str(_private_param("audio_capture_backend", "sounddevice")).lower()
+        self.start_trigger_blocks = max(1, int(_private_param("start_trigger_blocks", 1)))
 
         input_text_topic = _private_param("input_text_topic", "/vln/voice_input_text")
         output_text_topic = _private_param("output_text_topic", "/vln/voice_output_text")
@@ -622,28 +678,46 @@ class VoiceIONode:
                 self.tts_queue.task_done()
 
     def _capture_loop(self):
-        try:
-            import sounddevice as sd
-        except ImportError as exc:
-            rospy.logfatal("sounddevice is required in the conda env: %s", exc)
-            rospy.signal_shutdown("missing sounddevice")
-            return
-
         device = self.input_device if self.input_device not in ("", None) else None
         pre_roll_blocks = max(1, int(self.pre_roll_sec / (self.block_duration_ms / 1000.0)))
         pre_roll = deque(maxlen=pre_roll_blocks)
 
         try:
-            with sd.RawInputStream(
-                samplerate=self.sample_rate,
-                blocksize=self.block_size,
-                channels=self.channels,
-                dtype="int16",
-                device=device,
-            ) as stream:
-                rospy.loginfo("Listening for speech on input device: %s", device if device is not None else "default")
-                self._read_utterances(stream, pre_roll)
+            if self.audio_capture_backend == "parec":
+                with ParecInputStream(self.sample_rate, self.block_size, self.channels, device) as stream:
+                    rospy.loginfo(
+                        "Listening for speech with parec on input device: %s",
+                        device if device is not None else "default",
+                    )
+                    self._read_utterances(stream, pre_roll)
+            elif self.audio_capture_backend == "sounddevice":
+                try:
+                    import sounddevice as sd
+                except ImportError as exc:
+                    rospy.logfatal("sounddevice is required in the conda env: %s", exc)
+                    rospy.signal_shutdown("missing sounddevice")
+                    return
+
+                with sd.RawInputStream(
+                    samplerate=self.sample_rate,
+                    blocksize=self.block_size,
+                    channels=self.channels,
+                    dtype="int16",
+                    device=device,
+                ) as stream:
+                    rospy.loginfo(
+                        "Listening for speech with sounddevice on input device: %s",
+                        device if device is not None else "default",
+                    )
+                    self._read_utterances(stream, pre_roll)
+            else:
+                raise RuntimeError("unsupported audio_capture_backend: {}".format(self.audio_capture_backend))
+        except EOFError as exc:
+            rospy.logwarn("microphone capture ended: %s", exc)
+            rospy.signal_shutdown("microphone capture ended")
         except Exception as exc:
+            if rospy.is_shutdown():
+                return
             rospy.logfatal("microphone capture failed: %s", exc)
             rospy.signal_shutdown("microphone capture failed")
 
@@ -652,6 +726,7 @@ class VoiceIONode:
         utterance = []
         utterance_start = 0.0
         last_voice_time = 0.0
+        start_blocks = 0
 
         while not rospy.is_shutdown():
             data, overflowed = stream.read(self.block_size)
@@ -663,6 +738,7 @@ class VoiceIONode:
             if self.pause_listening_while_speaking and self.tts_active.is_set():
                 listening = False
                 utterance = []
+                start_blocks = 0
                 pre_roll.clear()
                 continue
 
@@ -672,11 +748,16 @@ class VoiceIONode:
             if not listening:
                 pre_roll.append(block)
                 if rms >= self.start_threshold:
-                    listening = True
-                    utterance_start = now
-                    last_voice_time = now
-                    utterance = list(pre_roll)
-                    rospy.loginfo("Speech started")
+                    start_blocks += 1
+                    if start_blocks >= self.start_trigger_blocks:
+                        listening = True
+                        utterance_start = now
+                        last_voice_time = now
+                        utterance = list(pre_roll)
+                        start_blocks = 0
+                        rospy.loginfo("Speech started")
+                else:
+                    start_blocks = 0
                 continue
 
             utterance.append(block)
@@ -691,6 +772,7 @@ class VoiceIONode:
                 pcm_bytes = b"".join(utterance)
                 listening = False
                 utterance = []
+                start_blocks = 0
                 pre_roll.clear()
                 self._handle_utterance(pcm_bytes, duration)
                 time.sleep(self.cooldown_sec)

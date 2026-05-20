@@ -10,12 +10,14 @@ tts_backend: local
 language: zh
 sample_rate: 48000
 channels: 1
-input_device: 6
+audio_capture_backend: parec
+input_device: alsa_input.pci-0000_06_00.6.HiFi__hw_acp__source
 
 # Energy-based utterance detection. RMS is normalized to 0.0 - 1.0.
 block_duration_ms: 30
-start_threshold: 0.018
-stop_threshold: 0.012
+start_threshold: 0.18
+stop_threshold: 0.12
+start_trigger_blocks: 3
 pre_roll_sec: 0.35
 end_silence_sec: 0.8
 min_utterance_sec: 0.35
@@ -47,6 +49,9 @@ local:
   fallback_tts_cmd:
     - spd-say
     - "{text}"
+
+parec:
+  executable: parec
 
 openai:
   api_key_env: OPENAI_API_KEY
