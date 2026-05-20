@@ -75,6 +75,16 @@ export DASHSCOPE_API_KEY=你的_api_key
 
 `qwen3-tts-vd-2026-01-26` 需要一个 Voice Design 声音。可以在 `config/voice_io.yaml` 中设置 `dashscope/tts_voice` 为已经创建好的 `voice_id`；如果留空，节点启动时会用 `dashscope/tts_voice_prompt` 自动创建一个声音并用于播报。
 
+如果云端 ASR 调不通，先用麦克风诊断脚本生成一段测试录音，再单独测试 DashScope ASR 链路：
+
+```bash
+conda run -n asr4trailer_voice python scripts/test_microphone_input.py
+export DASHSCOPE_API_KEY=你的_api_key
+conda run -n asr4trailer_voice python scripts/test_dashscope_asr.py
+```
+
+该脚本会逐步检查 API key、临时 OSS 上传、Fun-ASR 任务提交、任务轮询和结果下载。
+
 ## OpenAI 兼容后端
 
 设置 API key：

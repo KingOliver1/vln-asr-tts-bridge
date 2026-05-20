@@ -242,7 +242,7 @@ class DashScopeASR:
         deadline = time.monotonic() + self._timeout_sec
         url = self._api_base_url + "/tasks/{}".format(task_id)
         while time.monotonic() < deadline:
-            response = requests.get(url, headers=self._headers(async_task=False), timeout=30)
+            response = requests.post(url, headers=self._headers(async_task=False), timeout=30)
             data = _dashscope_json(response, "DashScope ASR poll")
             output = _dict_get(data, "output", {})
             task_status = _dict_get(output, "task_status", "")

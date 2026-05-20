@@ -105,6 +105,28 @@ class DashScopeVoiceIOTests(unittest.TestCase):
         self.assertEqual(kwargs["json"]["parameters"]["language_hints"], ["zh"])
         self.assertEqual(kwargs["headers"]["X-DashScope-Async"], "enable")
 
+    def test_dashscope_asr_poll_uses_post_task_api(self):
+        asr = self.node.DashScopeASR.__new__(self.node.DashScopeASR)
+        asr._api_key = "sk-test"
+        asr._api_base_url = "https://example.test/api/v1"
+        asr._timeout_sec = 1.0
+        asr._poll_interval_sec = 0.0
+
+        fake_response = FakeResponse(
+            payload={
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "results": [{"transcription_url": "https://example.test/result.json"}],
+                }
+            }
+        )
+        with mock.patch("requests.post", return_value=fake_response) as post:
+            result_url = asr._wait_for_result_url("task-123")
+
+        self.assertEqual(result_url, "https://example.test/result.json")
+        post.assert_called_once()
+        self.assertEqual(post.call_args.args[0], "https://example.test/api/v1/tasks/task-123")
+
     def test_dashscope_tts_uses_configured_voice_without_creating(self):
         params = {
             "dashscope/tts_model": "qwen3-tts-vd-2026-01-26",
