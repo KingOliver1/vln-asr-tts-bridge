@@ -62,6 +62,19 @@ def _audio_player_cmd():
     )
 
 
+def _package_dir():
+    return Path(__file__).resolve().parents[1]
+
+
+def _resolve_package_path(value):
+    if value in ("", None):
+        return ""
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(_package_dir() / path)
+
+
 def _dashscope_param(name, default=None):
     return _private_param("dashscope/" + name, default)
 
@@ -167,7 +180,7 @@ class LocalVoskASR:
         except ImportError as exc:
             raise RuntimeError("local ASR requires the vosk Python package in the conda env") from exc
 
-        model_path = _private_param("local/vosk_model_path", "")
+        model_path = _resolve_package_path(_private_param("local/vosk_model_path", ""))
         if not model_path:
             raise RuntimeError("~local/vosk_model_path is required when asr_backend=local")
         if not os.path.isdir(model_path):
@@ -414,9 +427,9 @@ class DashScopeASR:
 
 class LocalTTS:
     def __init__(self):
-        self._piper_executable = _private_param("local/piper_executable", "piper")
-        self._piper_model_path = _private_param("local/piper_model_path", "")
-        self._piper_config_path = _private_param("local/piper_config_path", "")
+        self._piper_executable = _resolve_package_path(_private_param("local/piper_executable", "piper"))
+        self._piper_model_path = _resolve_package_path(_private_param("local/piper_model_path", ""))
+        self._piper_config_path = _resolve_package_path(_private_param("local/piper_config_path", ""))
         self._audio_player_cmd = _audio_player_cmd()
         self._fallback_tts_cmd = _command_param("local/fallback_tts_cmd", ["spd-say", "{text}"])
 

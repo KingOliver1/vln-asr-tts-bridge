@@ -1,4 +1,4 @@
-name: asr4trailer_voice
+name: vln_asr_tts_voice
 channels:
   - conda-forge
   - defaults

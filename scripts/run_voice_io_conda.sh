@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_NAME="${ASR4TRAILER_CONDA_ENV:-asr4trailer_voice}"
+ENV_NAME="${VLN_ASR_TTS_CONDA_ENV:-${ASR4TRAILER_CONDA_ENV:-vln_asr_tts_voice}}"
+LEGACY_ENV_NAME="asr4trailer_voice"
 CONDA_EXE="${CONDA_EXE:-/home/tianbot/miniconda3/bin/conda}"
 
 if [ ! -x "$CONDA_EXE" ]; then
@@ -16,6 +17,14 @@ fi
 CONDA_BASE="$("$CONDA_EXE" info --base)"
 # shellcheck disable=SC1091
 source "${CONDA_BASE}/etc/profile.d/conda.sh"
+
+if ! "$CONDA_EXE" env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
+  if [ "$ENV_NAME" = "vln_asr_tts_voice" ] && "$CONDA_EXE" env list | awk '{print $1}' | grep -qx "$LEGACY_ENV_NAME"; then
+    echo "conda env ${ENV_NAME} not found; using legacy env ${LEGACY_ENV_NAME}" >&2
+    ENV_NAME="$LEGACY_ENV_NAME"
+  fi
+fi
+
 conda activate "$ENV_NAME"
 
 # Keep the conda environment isolated from ~/.local Python packages.
@@ -42,4 +51,4 @@ done
 # Allows roslaunch to find this package even before it is installed into a catkin workspace.
 export ROS_PACKAGE_PATH="${PKG_DIR}:${ROS_PACKAGE_PATH:-}"
 
-exec roslaunch asr4trailer voice_io.launch "$@"
+exec roslaunch vln_asr_tts_bridge voice_io.launch "$@"

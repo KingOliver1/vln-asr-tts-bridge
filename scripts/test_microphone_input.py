@@ -16,7 +16,16 @@ import yaml
 
 PKG_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = PKG_DIR / "config" / "voice_io.yaml"
-DEFAULT_OUTPUT = Path("/tmp/asr4trailer_mic_test.wav")
+DEFAULT_OUTPUT = Path("/tmp/vln_asr_tts_bridge_mic_test.wav")
+
+
+def resolve_package_path(value):
+    if value in ("", None):
+        return ""
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(PKG_DIR / path)
 
 
 def load_config(path):
@@ -203,7 +212,7 @@ def analyze_audio(pcm_bytes, cfg):
 
 
 def transcribe_with_vosk(pcm_bytes, cfg):
-    model_path = cfg.get("local", {}).get("vosk_model_path", "")
+    model_path = resolve_package_path(cfg.get("local", {}).get("vosk_model_path", ""))
     if not model_path:
         return None, "未配置 local/vosk_model_path"
     if not Path(model_path).is_dir():
@@ -293,7 +302,7 @@ def print_conclusion(analysis, vosk_text):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="测试 asr4trailer 麦克风采集、VAD 阈值和本地 Vosk 识别")
+    parser = argparse.ArgumentParser(description="测试 VLN ASR/TTS bridge 麦克风采集、VAD 阈值和本地 Vosk 识别")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="voice_io.yaml 路径")
     parser.add_argument("--duration", type=float, default=6.0, help="录音时长，秒")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="保存测试 wav 的路径")

@@ -30,16 +30,16 @@ cloud_asr_remove_dc_offset: true
 
 local:
   # Required for local ASR. Example:
-  # /home/tianbot/trailer/Asr4trailer/models/vosk-model-small-cn-0.22
-  vosk_model_path: /home/tianbot/trailer/Asr4trailer/models/vosk-model-cn-0.22
+  # models/vosk-model-small-cn-0.22
+  vosk_model_path: models/vosk-model-cn-0.22
   # For local Vosk, use Vosk endpoint detection instead of RMS VAD.
   # This is more reliable on the current digital microphone input.
   vosk_streaming: true
 
   # Optional for local TTS. If empty, fallback_tts_cmd is used.
-  piper_executable: /home/tianbot/trailer/Asr4trailer/tools/piper/piper
-  piper_model_path: /home/tianbot/trailer/Asr4trailer/models/piper/zh_CN_huayan_medium/zh_CN-huayan-medium.onnx
-  piper_config_path: /home/tianbot/trailer/Asr4trailer/models/piper/zh_CN_huayan_medium/zh_CN-huayan-medium.onnx.json
+  piper_executable: tools/piper/piper
+  piper_model_path: models/piper/zh_CN_huayan_medium/zh_CN-huayan-medium.onnx
+  piper_config_path: models/piper/zh_CN_huayan_medium/zh_CN-huayan-medium.onnx.json
 
   # Commands are argv lists, not shell strings. Placeholders:
   # {audio_file}: generated speech audio path

@@ -18,7 +18,7 @@ import yaml
 
 PKG_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = PKG_DIR / "config" / "voice_io.yaml"
-DEFAULT_AUDIO = Path("/tmp/asr4trailer_mic_test.wav")
+DEFAULT_AUDIO = Path("/tmp/vln_asr_tts_bridge_mic_test.wav")
 SAMPLE_AUDIO_URL = "https://dashscope.oss-cn-beijing.aliyuncs.com/samples/audio/paraformer/hello_world_female2.wav"
 
 

@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>asr4trailer</name>
+  <name>vln_asr_tts_bridge</name>
   <version>0.1.0</version>
-  <description>ROS1 voice input and output bridge for VLN navigation.</description>
+  <description>ROS1 ASR/TTS voice bridge for VLN navigation.</description>
 
   <maintainer email="tianbot@example.com">tianbot</maintainer>
   <license>MIT</license>
