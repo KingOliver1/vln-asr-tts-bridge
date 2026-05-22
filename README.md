@@ -175,8 +175,6 @@ conda run -n vln_asr_tts_voice python -c "import sounddevice as sd; print(sd.que
 conda run -n vln_asr_tts_voice python scripts/test_microphone_input.py --list-devices
 ```
 
-脚本会保存测试录音到 `/tmp/vln_asr_tts_bridge_mic_test.wav`，并输出电平、DC offset、VAD 是否触发，以及 Vosk 对测试录音的识别结果。
-
 ## 重要配置
 
 常用参数在 `config/voice_io.yaml`：
